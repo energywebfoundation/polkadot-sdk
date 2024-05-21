@@ -352,8 +352,151 @@ where
 		.metrics(metrics)
 		.spawner(spawner);
 
-	if let Some(capacity) = overseer_message_channel_capacity_override {
-		Ok(builder.message_channel_capacity(capacity))
+	let builder = if let Some(capacity) = overseer_message_channel_capacity_override {
+		builder.message_channel_capacity(capacity)
+	} else {
+		builder
+	};
+	Ok(builder)
+}
+
+/// Obtain a prepared collator `Overseer`, that is initialized with all default values.
+pub fn collator_overseer_builder<Spawner, RuntimeClient>(
+	OverseerGenArgs {
+		runtime_client,
+		network_service,
+		sync_service,
+		authority_discovery_service,
+		collation_req_v1_receiver,
+		collation_req_v2_receiver,
+		available_data_req_receiver,
+		registry,
+		spawner,
+		is_parachain_node,
+		overseer_message_channel_capacity_override,
+		req_protocol_names,
+		peerset_protocol_names,
+		notification_services,
+	}: OverseerGenArgs<Spawner, RuntimeClient>,
+) -> Result<
+	InitializedOverseerBuilder<
+		SpawnGlue<Spawner>,
+		Arc<RuntimeClient>,
+		DummySubsystem,
+		DummySubsystem,
+		DummySubsystem,
+		DummySubsystem,
+		DummySubsystem,
+		AvailabilityRecoverySubsystem,
+		DummySubsystem,
+		DummySubsystem,
+		DummySubsystem,
+		RuntimeApiSubsystem<RuntimeClient>,
+		DummySubsystem,
+		NetworkBridgeRxSubsystem<
+			Arc<dyn sc_network::service::traits::NetworkService>,
+			AuthorityDiscoveryService,
+		>,
+		NetworkBridgeTxSubsystem<
+			Arc<dyn sc_network::service::traits::NetworkService>,
+			AuthorityDiscoveryService,
+		>,
+		ChainApiSubsystem<RuntimeClient>,
+		CollationGenerationSubsystem,
+		CollatorProtocolSubsystem,
+		DummySubsystem,
+		DummySubsystem,
+		DummySubsystem,
+		DummySubsystem,
+		DummySubsystem,
+		DummySubsystem,
+		DummySubsystem,
+	>,
+	Error,
+>
+where
+	Spawner: 'static + SpawnNamed + Clone + Unpin,
+	RuntimeClient: RuntimeApiSubsystemClient + ChainApiBackend + AuxStore + 'static,
+{
+	use polkadot_node_subsystem_util::metrics::Metrics;
+
+	let notification_sinks = Arc::new(Mutex::new(HashMap::new()));
+
+	let spawner = SpawnGlue(spawner);
+
+	let network_bridge_metrics: NetworkBridgeMetrics = Metrics::register(registry)?;
+
+	let builder = Overseer::builder()
+		.network_bridge_tx(NetworkBridgeTxSubsystem::new(
+			network_service.clone(),
+			authority_discovery_service.clone(),
+			network_bridge_metrics.clone(),
+			req_protocol_names,
+			peerset_protocol_names.clone(),
+			notification_sinks.clone(),
+		))
+		.network_bridge_rx(NetworkBridgeRxSubsystem::new(
+			network_service.clone(),
+			authority_discovery_service.clone(),
+			Box::new(sync_service.clone()),
+			network_bridge_metrics,
+			peerset_protocol_names,
+			notification_services,
+			notification_sinks,
+		))
+		.availability_distribution(DummySubsystem)
+		.availability_recovery(AvailabilityRecoverySubsystem::for_collator(
+			available_data_req_receiver,
+			Metrics::register(registry)?,
+		))
+		.availability_store(DummySubsystem)
+		.bitfield_distribution(DummySubsystem)
+		.bitfield_signing(DummySubsystem)
+		.candidate_backing(DummySubsystem)
+		.candidate_validation(DummySubsystem)
+		.pvf_checker(DummySubsystem)
+		.chain_api(ChainApiSubsystem::new(runtime_client.clone(), Metrics::register(registry)?))
+		.collation_generation(CollationGenerationSubsystem::new(Metrics::register(registry)?))
+		.collator_protocol({
+			let side = match is_parachain_node {
+				IsParachainNode::No =>
+					return Err(Error::Overseer(SubsystemError::Context(
+						"build parachain node overseer for validator".to_owned(),
+					))),
+				IsParachainNode::Collator(collator_pair) => ProtocolSide::Collator {
+					peer_id: network_service.local_peer_id(),
+					collator_pair,
+					request_receiver_v1: collation_req_v1_receiver,
+					request_receiver_v2: collation_req_v2_receiver,
+					metrics: Metrics::register(registry)?,
+				},
+				IsParachainNode::FullNode => ProtocolSide::None,
+			};
+			CollatorProtocolSubsystem::new(side)
+		})
+		.provisioner(DummySubsystem)
+		.runtime_api(RuntimeApiSubsystem::new(
+			runtime_client.clone(),
+			Metrics::register(registry)?,
+			spawner.clone(),
+		))
+		.statement_distribution(DummySubsystem)
+		.approval_distribution(DummySubsystem)
+		.approval_voting(DummySubsystem)
+		.gossip_support(DummySubsystem)
+		.dispute_coordinator(DummySubsystem)
+		.dispute_distribution(DummySubsystem)
+		.chain_selection(DummySubsystem)
+		.prospective_parachains(DummySubsystem)
+		.activation_external_listeners(Default::default())
+		.span_per_active_leaf(Default::default())
+		.active_leaves(Default::default())
+		.supports_parachains(runtime_client)
+		.metrics(Metrics::register(registry)?)
+		.spawner(spawner);
+
+	let builder = if let Some(capacity) = overseer_message_channel_capacity_override {
+		builder.message_channel_capacity(capacity)
 	} else {
 		Ok(builder)
 	}
