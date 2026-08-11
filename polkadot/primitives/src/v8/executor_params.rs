@@ -120,15 +120,16 @@ pub enum ExecutorParam {
 	/// Enables WASM bulk memory proposal
 	#[codec(index = 7)]
 	WasmExtBulkMemory,
-	/// Enables optional host functions. Multiple entries with different
-	/// [`ExecutorHostFunction`] variants can be present in the executor parameters
-	/// simultaneously.
+	/// Enables optional host functions. Multiple entries with different [`ExecutorHostFunction`]
+	/// variants can be present in the executor parameters simultaneously.
 	#[codec(index = 8)]
 	EnabledHostFunction(ExecutorHostFunction),
 }
 
-/// Optional host functions that may be enabled for PVF execution via
-/// [`ExecutorParam::EnabledHostFunction`].
+/// Optional host functions that can be enabled via [`ExecutorParam::EnabledHostFunction`].
+///
+/// Each variant represents a set of host functions that can be independently toggled on or off.
+/// New host function sets should be added here with deterministic discriminants.
 #[derive(
 	Clone,
 	Debug,
